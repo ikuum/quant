@@ -1,3 +1,5 @@
+from fileinput import close
+
 import numpy as np
 import pandas as pd
 import datetime, os, time
@@ -17,6 +19,7 @@ class OptimizedModel:
         self.start_datetime = datetime.datetime(2021, 3, 1, 0, 0, 0)  # 有效数据起始时间
         self.scaler = StandardScaler()  # 数据标准化器
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 自动选择GPU或CPU
+        # self.device = 'cpu'
         print(f"Using device: {self.device}")  # 打印使用的设备
 
     def get_all_symbol_list(self):
@@ -108,6 +111,40 @@ class OptimizedModel:
         vwap_deviation = torch.where(torch.isfinite(vwap_deviation), vwap_deviation,
                                      torch.tensor(0.0, device=self.device))  # 处理无穷值
 
+        # #布林带（Bollinger Bands）
+        # ma_20 = close.rolling(20).mean()  # 中轨（20日MA）
+        # std_20 = close.rolling(20).std()  # 标准差
+        # upper_band = ma_20 + 2 * std_20  # 上轨
+        # lower_band = ma_20 - 2 * std_20  # 下轨
+        # bollinger_width = upper_band - lower_band  # 带宽
+        #
+        # # 1. OBV转换（示例）
+        # obv = torch.zeros_like(close, device=self.device)
+        # obv[0] = volume[0] if close[0] > 0 else -volume[0]
+        # for i in range(1, len(close)):
+        #     obv[i] = obv[i - 1] + (volume[i] if close[i] > close[i - 1] else -volume[i])
+        #
+        # # OBV衍生特征
+        # obv_pct_change = obv / (obv.rolling(20).mean() + 1e-6) - 1  # 20日百分比变化
+        # obv_break_high = (obv > obv.rolling(20).max().shift(1)).float()  # 突破20日高点
+        #
+        # # 价量相关性（滚动20周期）
+        # price_volume_corr = torch.zeros_like(close, device=self.device)
+        # for i in range(19, len(close)):
+        #     window_close = close[i - 19:i + 1]
+        #     window_volume = volume[i - 19:i + 1]
+        #     cov = torch.mean(window_close * window_volume) - torch.mean(window_close) * torch.mean(window_volume)
+        #     std_close = torch.std(window_close)
+        #     std_volume = torch.std(window_volume)
+        #     price_volume_corr[i] = cov / (std_close * std_volume + 1e-6)  # 防止除零
+        # # 价量相关性衍生特征
+        # corr_ma_diff = price_volume_corr - price_volume_corr.rolling(40).mean()  # 偏离40日均值
+        # corr_extreme = (price_volume_corr > 0.7).float() - (price_volume_corr < -0.5).float()  # 极端值标记
+        #
+        # # 流动性缺口
+        # liquidity_gap = (high - low) / (volume + 1e-6)  # 单位波动所需成交量
+        # gap_zscore = (liquidity_gap - liquidity_gap.rolling(60).mean()) / (liquidity_gap.rolling(60).std() + 1e-6)
+
         #   将计算结果添加回DataFrame
         df['vwap'] = vwap.cpu().numpy()
         df['rsi'] = rsi.cpu().numpy()
@@ -115,6 +152,42 @@ class OptimizedModel:
         df['atr'] = atr.cpu().numpy()
         df['buy_ratio'] = buy_ratio.cpu().numpy()
         df['vwap_deviation'] = vwap_deviation.cpu().numpy()
+        #
+        # def last_valid_value(tensor):
+        #     """获取最后一个有效值（跳过NaN和Inf）"""
+        #     valid_mask = torch.isfinite(tensor)
+        #     if valid_mask.any():
+        #         return tensor[valid_mask][-1].item()
+        #     return 0.0  # 默认值
+        # # 布林带标量化
+        # df['bb_upper_latest'] = last_valid_value(upper_band)
+        # df['bb_lower_latest'] = last_valid_value(lower_band)
+        # df['price_bb_position'] = last_valid_value(
+        #     (close - lower_band) / (upper_band - lower_band + 1e-6)
+        # )  # 价格在布林带中的相对位置（0-1）
+        # df['bollinger_width'] = bollinger_width.cpu().numpy()
+        #
+        # # OBV衍生标量特征
+        # df['obv_latest'] = last_valid_value(obv)  # 最新值
+        # df['obv_ma5_ratio'] = last_valid_value(obv / obv.rolling(5).mean())  # 与5日均值比
+        # df['obv_zscore'] = last_valid_value(
+        #     (obv - obv.rolling(20).mean()) / (obv.rolling(20).std() + 1e-6)
+        # )  # 20日标准化
+        # df['obv_pct_change'] = obv_pct_change.cpu().numpy()
+        # df['obv_break_high'] = obv_break_high.cpu().numpy()
+        #
+        # # 价量相关性衍生标量特征
+        # df['corr_latest'] = last_valid_value(price_volume_corr)
+        # df['corr_ma20_diff'] = last_valid_value(price_volume_corr - price_volume_corr.rolling(20).mean())
+        # df['corr_extreme'] = 1.0 if df['corr_latest'] > 0.7 else (
+        #     -1.0 if df['corr_latest'] < -0.5 else 0.0
+        # )
+        # df['corr_ma_diff'] = corr_ma_diff.cpu().numpy()
+        # df['corr_extreme'] = corr_extreme.cpu().numpy()
+        #
+        # # 流动性缺口
+        # df['liquidity_gap'] = liquidity_gap.cpu().numpy()
+        # df['gap_zscore'] = gap_zscore.cpu().numpy()
         return df
 
     def get_single_symbol_kline_data(self, symbol):
@@ -152,8 +225,7 @@ class OptimizedModel:
             # 出错时返回包含所有列的DataFrame
             return pd.DataFrame(
                 columns=['open_price', 'high_price', 'low_price', 'close_price', 'volume', 'amount', 'buy_volume',
-                         'vwap',
-                         'rsi', 'macd', 'buy_ratio', 'vwap_deviation', 'atr'])
+                         'vwap','rsi', 'macd', 'buy_ratio', 'vwap_deviation', 'atr'])
 
     def get_all_symbol_kline(self):
         # 加载所有加密货币的K线数据
@@ -219,11 +291,14 @@ class OptimizedModel:
         macd_arr = align_df(df_list, loaded_symbols, 'macd')
         buy_volume_arr = align_df(df_list, loaded_symbols, 'buy_volume')
         volume_arr = align_df(df_list, loaded_symbols, 'volume')
+        low_price_arr = align_df(df_list, loaded_symbols, 'low_price')
+        close_price_arr = align_df(df_list, loaded_symbols, 'close_price')
+        high_price_arr = align_df(df_list, loaded_symbols, 'high_price')
 
         # 打印耗时
         print(f"Finished get all symbols kline, time elapsed: {datetime.datetime.now() - t0}")
         # 返回所有数据
-        return all_symbol_list, time_arr, vwap_arr, amount_arr, atr_arr, macd_arr, buy_volume_arr, volume_arr
+        return all_symbol_list, time_arr, vwap_arr, amount_arr, atr_arr, macd_arr, buy_volume_arr, volume_arr,low_price_arr, close_price_arr, high_price_arr
 
     def weighted_spearmanr(self, y_true, y_pred):
         # 计算加权Spearman相关系数
@@ -246,8 +321,8 @@ class OptimizedModel:
         # 返回相关系数（避免除以零）
         return cov / np.sqrt(var_true * var_pred) if var_true * var_pred > 0 else 0
 
-    def train(self, df_target, df_4h_momentum, df_7d_momentum, df_amount_sum, df_vol_momentum, df_atr, df_macd,
-              df_buy_pressure):
+    def train(self, df_target, df_4h_momentum, df_7d_momentum, df_amount_sum, df_vol_momentum,
+                   df_atr,df_macd, df_buy_pressure, df_bb_position, df_obv_ratio, df_obv_zscore, df_corr_diff, df_corr_extreme,df_gap_zscore):
         # 训练XGBoost模型
 
         # 将因子数据转换为长格式（多索引：时间和符号）
@@ -258,6 +333,13 @@ class OptimizedModel:
         factor5_long = df_atr.stack()
         factor6_long = df_macd.stack()
         factor7_long = df_buy_pressure.stack()
+        factor8_long = df_bb_position.stack()
+        factor9_long = df_obv_ratio.stack()
+        factor10_long = df_obv_zscore.stack()
+        factor11_long = df_corr_diff.stack()
+        factor12_long = df_corr_extreme.stack()
+        factor13_long = df_corr_extreme.stack()
+
         target_long = df_target.stack()  # 目标变量（未来24小时收益率）
 
         # 设置列名
@@ -268,11 +350,18 @@ class OptimizedModel:
         factor5_long.name = 'atr'
         factor6_long.name = 'macd'
         factor7_long.name = 'buy_pressure'
+        factor8_long.name = 'bb_position'
+        factor9_long.name = 'obv_ratio'
+        factor10_long.name = 'obv_zscore'
+        factor11_long.name = 'corr_diff'
+        factor12_long.name = 'corr_extreme'
+        factor13_long.name = 'gap_zscore'
+
         target_long.name = 'target'
 
         # 合并所有因子和目标变量
         data = pd.concat(
-            [factor1_long, factor2_long, factor3_long, factor4_long, factor5_long, factor6_long, factor7_long,
+            [factor1_long, factor2_long, factor3_long, factor4_long, factor5_long, factor6_long, factor7_long,factor8_long,factor9_long,factor10_long,factor11_long,factor12_long,factor13_long,
              target_long],
             axis=1)
         print(f"Data size before dropna: {len(data)}")
@@ -281,7 +370,7 @@ class OptimizedModel:
         print(f"Data size after dropna: {len(data)}")
 
         # 准备特征和目标变量
-        X = data[['4h_momentum', '7d_momentum', 'amount_sum', 'vol_momentum', 'atr', 'macd', 'buy_pressure']]
+        X = data[['4h_momentum', '7d_momentum', 'amount_sum', 'vol_momentum', 'atr', 'macd', 'buy_pressure','bb_position','obv_ratio','obv_zscore','corr_diff','corr_extreme','gap_zscore']]
         y = data['target'].replace([np.inf, -np.inf], 0)  # 处理目标变量的无穷值
 
         # 标准化特征
@@ -392,7 +481,7 @@ class OptimizedModel:
     def run(self):
         # 主运行函数
         # 加载所有加密货币数据
-        all_symbol_list, time_arr, vwap_arr, amount_arr, atr_arr, macd_arr, buy_volume_arr, volume_arr = self.get_all_symbol_kline()
+        all_symbol_list, time_arr, vwap_arr, amount_arr, atr_arr, macd_arr, buy_volume_arr, volume_arr,low_price_arr, close_price_arr, high_price_arr = self.get_all_symbol_kline()
         if not all_symbol_list:
             print("No data loaded, exiting.")
             return
@@ -406,11 +495,15 @@ class OptimizedModel:
         df_macd = pd.DataFrame(macd_arr, columns=all_symbol_list, index=time_arr)  # MACD
         df_buy_volume = pd.DataFrame(buy_volume_arr, columns=all_symbol_list, index=time_arr)  # 买入量
         df_volume = pd.DataFrame(volume_arr, columns=all_symbol_list, index=time_arr)  # 总交易量
+        df_low_price = pd.DataFrame(low_price_arr, columns=all_symbol_list, index=time_arr)
+        df_close_price = pd.DataFrame(close_price_arr, columns=all_symbol_list, index=time_arr)
+        df_high_price = pd.DataFrame(high_price_arr, columns=all_symbol_list, index=time_arr)
 
         # 定义时间窗口
         windows_1d = 4 * 24 * 1  # 1天（15分钟数据）
         windows_7d = 4 * 24 * 7  # 7天
         windows_4h = 4 * 4  # 4小时
+        windows_20d = 4 * 24 * 20  # 新增20天窗口
 
         # 计算动量因子
         df_4h_momentum = (df_vwap / df_vwap.shift(windows_4h) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)  # 4小时动量
@@ -428,10 +521,48 @@ class OptimizedModel:
         # 计算24小时收益率（目标变量）
         df_24hour_rtn = (df_vwap / df_vwap.shift(windows_1d) - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
 
+        # 布林带因子（使用收盘价计算）
+        df_bb_ma = df_close_price.rolling(windows_20d).mean()
+        df_bb_std = df_close_price.rolling(windows_20d).std()
+        df_bb_upper = df_bb_ma + 2 * df_bb_std
+        df_bb_lower = df_bb_ma - 2 * df_bb_std
+        df_bb_width = df_bb_upper - df_bb_lower
+        df_bb_position = (df_close_price - df_bb_lower) / (df_bb_width + 1e-6)
+
+        # OBV能量潮因子
+        df_obv = (df_volume * np.sign(df_close_price.diff())).cumsum()
+        df_obv_ma5 = df_obv.rolling(5).mean()
+        df_obv_ma20 = df_obv.rolling(windows_20d).mean()
+        df_obv_std20 = df_obv.rolling(windows_20d).std()
+        df_obv_ratio = df_obv / df_obv_ma5
+        df_obv_zscore = (df_obv - df_obv_ma20) / (df_obv_std20 + 1e-6)
+
+        # 价量相关性因子
+        df_corr = df_close_price.rolling(windows_20d).corr(df_volume)
+        df_corr_ma = df_corr.rolling(windows_20d).mean()
+        df_corr_diff = df_corr - df_corr_ma
+        df_corr_extreme = pd.DataFrame(
+            np.select(
+                [df_corr > 0.7, df_corr < -0.5],
+                [1, -1],
+                default=0
+            ),
+            columns=all_symbol_list,
+            index=time_arr
+        )
+
+        # 流动性缺口因子
+        df_range = df_close_price.rolling(windows_1d).max() - df_close_price.rolling(windows_1d).min()
+        df_liquidity_gap = df_range / (df_volume + 1e-6)
+        df_gap_zscore = (df_liquidity_gap - df_liquidity_gap.rolling(windows_20d).mean()) / \
+                        (df_liquidity_gap.rolling(windows_20d).std() + 1e-6)
+
+
+
+
         # 训练模型（使用滞后的24小时收益率作为目标）
         self.train(df_24hour_rtn.shift(-windows_1d), df_4h_momentum, df_7d_momentum, df_amount_sum, df_vol_momentum,
-                   df_atr,
-                   df_macd, df_buy_pressure)
+                   df_atr,df_macd, df_buy_pressure, df_bb_position, df_obv_ratio, df_obv_zscore, df_corr_diff, df_corr_extreme,df_gap_zscore)
 
 
 if __name__ == '__main__':
